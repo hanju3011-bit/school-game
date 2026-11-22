@@ -1,0 +1,235 @@
+<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>동마중학교 야간 탐험</title>
+<style>
+:root{--bg:#0b1220;--fg:#eaf0ff;--navy:#1b3a6b;--green:#2e8b57;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b1220;--fg:#eaf0ff}}
+:root[data-theme="dark"]{--bg:#0b1220;--fg:#eaf0ff}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,'Apple SD Gothic Neo','Noto Sans KR',sans-serif;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+.ui{position:fixed;z-index:5}.b{border:2px solid #ffffff55;background:#10203a99;color:var(--fg);border-radius:14px;font:600 14px inherit;padding:10px 12px;backdrop-filter:blur(4px)}
+#top{left:10px;top:calc(8px + env(safe-area-inset-top,0px));display:flex;gap:8px;align-items:center;font-size:14px}
+#view{right:10px;top:calc(8px + env(safe-area-inset-top,0px))}
+#dbg{right:10px;top:calc(56px + env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:6px}
+.bar{width:90px;height:8px;background:#0006;border-radius:4px;overflow:hidden}.bar i{display:block;height:100%;width:0;background:#e5484d}
+#joy{left:0;bottom:0;width:42vw;height:55vh;z-index:3}
+#base{position:fixed;left:28px;bottom:calc(28px + env(safe-area-inset-bottom,0px));width:120px;height:120px;border-radius:50%;background:#ffffff18;border:2px solid #ffffff44;z-index:4;pointer-events:none}
+#knob{position:absolute;left:35px;top:35px;width:50px;height:50px;border-radius:50%;background:#ffffff77}
+#btns{right:18px;bottom:calc(26px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px;align-items:flex-end}
+#btns .b{width:78px;height:78px;border-radius:50%;padding:0}
+#stam{width:78px}#stam i{background:#4cc38a}
+#prompt{left:50%;transform:translateX(-50%);bottom:30vh;font-size:14px;display:none}
+#scr{inset:0;z-index:20;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;background:radial-gradient(#1b3a6bcc,#050a14f2)}
+#scr h1{margin:0;font-size:clamp(30px,8vw,56px);letter-spacing:.1em}#scr h1 span{color:#5fd39a}
+#scr p{margin:0;opacity:.8;font-size:14px;line-height:1.6}#scr button{font-size:18px;padding:14px 36px;background:var(--green);border-color:#fff8}
+#rot{left:0;right:0;top:50%;text-align:center;display:none;z-index:30;background:#000c;padding:10px}
+@media (orientation:portrait){#rot{display:block}}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="rot">📱 가로 모드로 돌리면 더 잘 보여요</div>
+<div class="ui b" id="top"><span id="clock">☀ 17:30</span><span id="heart">❤</span><div class="bar"><i id="danger"></i></div></div>
+<button class="ui b" id="view">시점 전환</button>
+<div class="ui" id="dbg"><button class="b" id="spd">⏩ ×1</button><button class="b" id="ngt">🌙 밤으로</button></div>
+<div id="joy" class="ui"></div><div id="base"><div id="knob"></div></div>
+<div class="ui" id="btns"><div class="bar" id="stam"><i id="stamI" style="width:100%"></i></div><button class="b" id="run">달리기</button><button class="b" id="act">상호작용</button></div>
+<div class="ui b" id="prompt"></div>
+<div class="ui" id="scr"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ===== config.js : 학교명·상징색·텍스처 교체 슬롯 =====
+ 실제 사진 교체: textures.wall = {map:'assets/textures/wall_color.jpg', normalMap:'...', roughnessMap:'...'} */
+const CFG={school:'동마중학교',colors:{navy:0x1b3a6b,green:0x2e8b57}, /* 상징색은 가정값: 실제 색으로 교체 */
+ textures:{}, dayLength:240};
+const V3=THREE.Vector3,MU=THREE.MathUtils;
+
+/* ===== MaterialLibrary : 프로시저럴 PBR + 외부 텍스처 매핑 ===== */
+class MaterialLibrary{
+ constructor(){this.cache={};this.defs={wall:{c:'#d8d2c0',n:14,r:.9},floor:{c:'#9aa097',n:18,r:.55,grid:1},grass:{c:'#4f7a3a',n:40,r:1},
+  asphalt:{c:'#3b3d42',n:30,r:.95},track:{c:'#b5533a',n:20,r:.9,lane:1},wood:{c:'#8a5a33',n:22,r:.7,grain:1},
+  ceiling:{c:'#e6e6e0',n:6,r:.95},board:{c:'#24493a',n:8,r:.8},navy:{c:'#1b3a6b',n:8,r:.6},fence:{c:'#6e7a80',n:10,r:.5}}}
+ tex(d){const s=128,cv=document.createElement('canvas');cv.width=cv.height=s;const x=cv.getContext('2d');x.fillStyle=d.c;x.fillRect(0,0,s,s);
+  for(let i=0;i<s*s/4;i++){x.fillStyle=Math.random()<.5?`rgba(0,0,0,${Math.random()*d.n/100})`:`rgba(255,255,255,${Math.random()*d.n/100})`;x.fillRect(Math.random()*s,Math.random()*s,2,2)}
+  x.strokeStyle='rgba(0,0,0,.28)';x.lineWidth=2;
+  if(d.grid){x.strokeRect(0,0,s,s)}
+  if(d.lane){x.strokeStyle='#fff';x.lineWidth=4;x.beginPath();x.moveTo(0,s/2);x.lineTo(s,s/2);x.stroke()}
+  if(d.grain){for(let i=0;i<9;i++){x.beginPath();x.moveTo(0,i*14+Math.random()*6);x.lineTo(s,i*14+Math.random()*6);x.stroke()}}
+  const t=new THREE.CanvasTexture(cv);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.encoding=THREE.sRGBEncoding;return t}
+ get(k,rx=1,ry=1){const id=k+rx+'_'+ry;if(this.cache[id])return this.cache[id];const d=this.defs[k],t=this.tex(d);t.repeat.set(rx,ry);
+  const m=new THREE.MeshStandardMaterial({map:t,bumpMap:t,bumpScale:.4,roughness:d.r,metalness:0});
+  const e=CFG.textures[k];if(e){const L=new THREE.TextureLoader();for(const s of ['map','normalMap','roughnessMap'])if(e[s]){const tx=L.load(e[s]);tx.wrapS=tx.wrapT=THREE.RepeatWrapping;tx.repeat.set(rx,ry);m[s]=tx}if(e.normalMap)m.bumpMap=null;m.needsUpdate=true}
+  return this.cache[id]=m}
+}
+
+/* ===== SchoolWorld : 동마중학교 프로토타입 맵 =====
+ 좌표: 정문(10,42) → 북(-z)으로 진입. 좌측(-x) 운동장, 정면 4층 본관(x -8~28, z -20~-8, 현관 x=10),
+ 본관 우측 끝 통로로 별관(체육관·급식실, x 32~52) 연결. 1층만 내부 보행 가능(2~4층은 외관+창). */
+class SchoolWorld{
+ constructor(scene,lib){this.scene=scene;this.lib=lib;this.cols=[];this.doors=[];this.lamps=[];this.tubeMat=new THREE.MeshStandardMaterial({color:0xffffff,emissive:0xfff6d8,emissiveIntensity:1});this.time=0;this.build()}
+ box(x,y,z,w,h,d,key,col=true,cast=true){const g=new THREE.BoxGeometry(w,h,d),uv=g.attributes.uv,sx=Math.max(w,d)/4,sy=Math.max(h,Math.min(w,d))/4;
+  for(let i=0;i<uv.count;i++)uv.setXY(i,uv.getX(i)*sx,uv.getY(i)*sy);
+  const m=new THREE.Mesh(g,typeof key==='string'?this.lib.get(key):key);m.position.set(x,y+h/2,z);m.castShadow=cast;m.receiveShadow=true;this.scene.add(m);
+  if(col){m.userData.c={minx:x-w/2,maxx:x+w/2,minz:z-d/2,maxz:z+d/2,on:true};this.cols.push(m.userData.c)}return m}
+ plane(x,z,w,d,key,y=.02,rx=1,ry=1){const m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),this.lib.get(key,rx,ry));m.rotation.x=-Math.PI/2;m.position.set(x,y,z);m.receiveShadow=true;this.scene.add(m);return m}
+ sign(text,sub,x,y,z,w,h,ry=0){const cv=document.createElement('canvas');cv.width=512;cv.height=128;const c=cv.getContext('2d');c.fillStyle='#1b3a6b';c.fillRect(0,0,512,128);c.fillStyle='#2e8b57';c.fillRect(0,100,512,28);
+  c.fillStyle='#fff';c.font='bold 56px sans-serif';c.textAlign='center';c.fillText(text,256,66);c.font='22px sans-serif';c.fillText(sub,256,94);
+  const t=new THREE.CanvasTexture(cv);t.encoding=THREE.sRGBEncoding;const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshStandardMaterial({map:t,roughness:.5}));m.position.set(x,y,z);m.rotation.y=ry;this.scene.add(m)}
+ hit(x,z,r=0){for(const c of this.cols)if(c.on&&x>c.minx-r&&x<c.maxx+r&&z>c.minz-r&&z<c.maxz+r)return true;return false}
+ blocked(a,b){for(let i=1;i<24;i++){const k=i/24;if(this.hit(a.x+(b.x-a.x)*k,a.z+(b.z-a.z)*k,0))return true}return false}
+ resolve(p,r){for(const c of this.cols){if(!c.on)continue;const cx=Math.max(c.minx,Math.min(p.x,c.maxx)),cz=Math.max(c.minz,Math.min(p.z,c.maxz)),dx=p.x-cx,dz=p.z-cz,d2=dx*dx+dz*dz;
+  if(d2<r*r){if(d2>1e-8){const d=Math.sqrt(d2),k=(r-d)/d;p.x+=dx*k;p.z+=dz*k}else p.x+=r}}
+  p.x=MU.clamp(p.x,-55,55);p.z=MU.clamp(p.z,-29,46)}
+ build(){const B=(...a)=>this.box(...a);
+  this.plane(0,6,140,140,'grass',0,35,35);this.plane(-28,12,28,40,'track',.03,3,5);this.plane(34,24,24,16,'asphalt',.03,6,4);this.plane(10,18,6,50,'floor',.03,2,12);
+  // 울타리·정문
+  B(-26,0,44,60,2,.3,'fence');B(36,0,44,40,2,.3,'fence');B(-56,0,8,.3,2,74,'fence');B(56,0,8,.3,2,74,'fence');B(0,0,-30,112,2,.3,'fence');
+  B(6,0,42,1,3.5,1,'navy');B(14,0,42,1,3.5,1,'navy');B(10,3.5,42,9,.8,.5,'navy',false);this.sign(CFG.school,'DONGMA MIDDLE SCHOOL',10,3.9,42.28,8.4,.7);
+  // 운동장 골대
+  for(const z of[-6,30]){B(-28-2,0,z,.1,2.4,.1,'fence',false);B(-28+2,0,z,.1,2.4,.1,'fence',false);B(-28,2.4,z,4,.1,.1,'fence',false)}
+  // 본관 외벽(4층 12.8m)
+  const H=12.8,T=.4;B(-0.25,0,-8,16.5,H,T,'wall');B(19.75,0,-8,16.5,H,T,'wall');B(10,H-1.5,-8,3,1.5,T,'wall',false);B(10,0,-20,36.4,H,T,'wall');B(-8,0,-14,T,H,12.4,'wall');
+  B(28,0,-16.15,T,H,7.7,'wall');B(28,0,-8.5,T,H,1,'wall');B(10,H,-14,36.8,.3,12.8,'ceiling',false);B(10,3.1,-14,35.6,.2,11.6,'ceiling',false,false);
+  this.sign(CFG.school+' 본관','현관',10,10.6,-7.77,6,1.3);
+  const glass=new THREE.MeshStandardMaterial({color:0x6f8fa8,roughness:.15,metalness:.6}),win=new THREE.InstancedMesh(new THREE.PlaneGeometry(1.7,1.3),glass,44),dm=new THREE.Object3D();let wi=0;
+  for(let f=0;f<4;f++)for(let i=0;i<12;i++){const x=-5+i*3;if(Math.abs(x-10)<2.5&&f<3)continue;if(wi>=44)break;dm.position.set(x,1.9+f*3.2,-7.78);dm.updateMatrix();win.setMatrixAt(wi++,dm.matrix)}win.count=wi;this.scene.add(win);
+  this.plane(10,-14,36,12,'floor',.01,9,3);
+  // 복도벽 + 교실 문(6칸)
+  const cx=[-5,1,7,13,19,25];let xs=-8;
+  cx.forEach(c=>{B((xs+c-.7)/2,0,-12.5,c-.7-xs,3.2,.3,'wall');xs=c+.7;
+   const pv=new THREE.Group();pv.position.set(c-.7,0,-12.5);const dm=new THREE.Mesh(new THREE.BoxGeometry(1.4,2.4,.08),this.lib.get('wood'));dm.position.set(.7,1.2,0);dm.castShadow=true;pv.add(dm);this.scene.add(pv);
+   const col={minx:c-.7,maxx:c+.7,minz:-12.6,maxz:-12.4,on:true};this.cols.push(col);this.doors.push({pv,col,open:false,a:0,x:c,z:-12.5})});
+  B((xs+28)/2,0,-12.5,28-xs,3.2,.3,'wall');
+  for(const x of[-2,4,10,16,22])B(x,0,-16.3,.25,3.2,7.5,'wall');
+  // 인스턴싱 책상·의자·칠판
+  const desks=new THREE.InstancedMesh(new THREE.BoxGeometry(.6,.75,.45),this.lib.get('wood'),72),ch=new THREE.InstancedMesh(new THREE.BoxGeometry(.4,.45,.4),this.lib.get('navy'),72),bd=new THREE.InstancedMesh(new THREE.BoxGeometry(3.2,1.2,.05),this.lib.get('board'),6);let n=0;
+  cx.forEach((c,j)=>{dm.position.set(c,1.5,-19.75);dm.updateMatrix();bd.setMatrixAt(j,dm.matrix);
+   for(let a=0;a<3;a++)for(let r=0;r<4;r++){const x=c-1.8+a*1.8,z=-14.6-r*1.3;dm.position.set(x,.375,z);dm.updateMatrix();desks.setMatrixAt(n,dm.matrix);dm.position.set(x,.225,z-.55);dm.updateMatrix();ch.setMatrixAt(n++,dm.matrix)}});
+  [desks,ch,bd].forEach(m=>{m.castShadow=true;m.receiveShadow=true;this.scene.add(m)});
+  // 복도 형광등
+  [0,10,20,27].forEach((x,i)=>{const t=new THREE.Mesh(new THREE.BoxGeometry(1.6,.05,.2),this.tubeMat);t.position.set(x,3.0,-10.3);this.scene.add(t);const l=new THREE.PointLight(0xfff0d0,1.1,13);l.position.set(x,2.8,-10.3);this.scene.add(l);this.lamps.push(l)});
+  // 별관(체육관·급식실) + 연결 통로
+  B(30,0,-12.4,4,3.2,.3,'wall');B(30,0,-8.8,4,3.2,.3,'wall');B(30,3.2,-10.6,4,.2,3.8,'ceiling',false);
+  B(42,0,-20,20,8,.4,'wall');B(52,0,-12,.4,8,16,'wall');B(42,0,-4,20,8,.4,'wall');B(32,0,-16.15,.4,8,7.7,'wall');B(32,0,-6.5,.4,8,5,'wall');B(32,5.5,-10.6,.4,2.5,3.7,'wall',false);B(42,8,-12,20.8,.3,16.8,'ceiling',false);
+  this.plane(42,-12,20,16,'wood',.02,5,4);this.sign('체육관 · 급식실','ANNEX',42,5,-3.78,6,1.5);
+  // 조경(인스턴싱)
+  const tr=new THREE.InstancedMesh(new THREE.CylinderGeometry(.2,.3,3,6),this.lib.get('wood'),16),cr=new THREE.InstancedMesh(new THREE.SphereGeometry(1.7,8,6),new THREE.MeshStandardMaterial({color:0x2f6b35,roughness:1}),16);
+  for(let i=0;i<16;i++){const x=i<8?-52+i*6:20+(i-8)*4.5,z=i<8?38:36;dm.position.set(x,1.5,z);dm.updateMatrix();tr.setMatrixAt(i,dm.matrix);dm.position.set(x,4,z);dm.updateMatrix();cr.setMatrixAt(i,dm.matrix);this.cols.push({minx:x-.3,maxx:x+.3,minz:z-.3,maxz:z+.3,on:true})}
+  tr.castShadow=cr.castShadow=true;this.scene.add(tr,cr);
+  this.glass=glass}
+ nearDoor(p){let b=null,bd=2.3;for(const d of this.doors){const q=Math.hypot(p.x-d.x,p.z-d.z);if(q<bd){bd=q;b=d}}return b}
+ toggleDoor(d){d.open=!d.open;d.col.on=!d.open}
+ update(dt,night){this.time+=dt;for(const d of this.doors){d.a+=((d.open?-Math.PI/2:0)-d.a)*Math.min(1,dt*6);d.pv.rotation.y=d.a}
+  this.lamps.forEach((l,i)=>{const f=night&&Math.sin(this.time*(23+i*9)+i*3)>.93-(i===2?.5:0)&&Math.sin(this.time*1.7+i)>.3;l.intensity=f?.08:(night?1.1:.5)});
+  this.tubeMat.emissiveIntensity=night?(this.lamps[2].intensity>.5?1:.1):.5}
+}
+
+/* ===== DayNightCycle ===== */
+class DayNightCycle{
+ constructor(scene,renderer){this.scene=scene;this.t=17.5;this.mult=1;this.night=false;this.onChange=()=>{};
+  this.sun=new THREE.DirectionalLight(0xffffff,1.5);this.sun.castShadow=true;this.sun.shadow.mapSize.set(1024,1024);const s=this.sun.shadow.camera;s.left=s.bottom=-34;s.right=s.top=34;s.far=170;this.sun.shadow.bias=-.0006;
+  this.hemi=new THREE.HemisphereLight(0xbcd8ff,0x44503a,.6);scene.add(this.sun,this.sun.target,this.hemi);
+  scene.fog=new THREE.Fog(0x8ec3f0,40,130);scene.background=new THREE.Color(0x8ec3f0);
+  const g=new THREE.BufferGeometry(),p=[];for(let i=0;i<400;i++){const v=new V3().randomDirection();v.y=Math.abs(v.y);p.push(v.x*250,v.y*250,v.z*250)}g.setAttribute('position',new THREE.Float32BufferAttribute(p,3));
+  this.stars=new THREE.Points(g,new THREE.PointsMaterial({color:0xffffff,size:1.6,transparent:true,opacity:0,fog:false}));scene.add(this.stars);
+  this.cols={day:new THREE.Color(0x8ec3f0),dusk:new THREE.Color(0xf08a4b),night:new THREE.Color(0x060a16)}}
+ setNight(){this.t=19.5}
+ get label(){const h=Math.floor(this.t),m=Math.floor((this.t%1)*60);return (this.night?'🌙 ':'☀ ')+String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+(this.night?' 밤':' 낮')}
+ update(dt,f){this.t=(this.t+dt*24/CFG.dayLength*this.mult)%24;const a=(this.t-6)/24*Math.PI*2,h=Math.sin(a),s=new V3(Math.cos(a),h,.4);
+  if(h>-.08){this.sun.position.copy(f).addScaledVector(s,70);this.sun.color.set(0xffffff).lerp(new THREE.Color(0xff9a50),MU.clamp(1-h*3,0,1));this.sun.intensity=MU.clamp((h+.08)*4,0,1)*1.7}
+  else{this.sun.position.copy(f).addScaledVector(s,-70);this.sun.color.set(0x8fa4ff);this.sun.intensity=.45}
+  this.sun.target.position.copy(f);this.hemi.intensity=.12+.6*MU.clamp(h*2+.5,0,1);
+  const c=this.scene.background;if(h>.25)c.copy(this.cols.day);else if(h>0)c.lerpColors(this.cols.dusk,this.cols.day,h/.25);else if(h>-.2)c.lerpColors(this.cols.night,this.cols.dusk,(h+.2)/.2);else c.copy(this.cols.night);
+  this.scene.fog.color.copy(c);this.stars.material.opacity=MU.clamp(-h*4,0,1);
+  const n=h<-.05;if(n!==this.night){this.night=n;this.onChange(n)}}
+}
+
+/* ===== PlayerController ===== */
+class PlayerController{
+ constructor(scene,world,ui){this.world=world;this.ui=ui;this.pos=new V3(10,0,38);this.yaw=0;this.pitch=0;this.stamina=100;this.running=false;this.moving=false;this.tired=false;this.flash=false;this.t=0;
+  this.body=this.makeBody();scene.add(this.body);this.light=new THREE.SpotLight(0xfff2cc,0,32,.5,.4,1);scene.add(this.light,this.light.target)}
+ makeBody(){const g=new THREE.Group(),M=(c,r=.7)=>new THREE.MeshStandardMaterial({color:c,roughness:r}),navy=CFG.colors.navy,add=(geo,mat,x,y,z,p=g)=>{const m=new THREE.Mesh(geo,mat);m.position.set(x,y,z);m.castShadow=true;p.add(m);return m};
+  this.legs=[-.11,.11].map(x=>{const p=new THREE.Group();p.position.set(x,.8,0);g.add(p);add(new THREE.CylinderGeometry(.08,.07,.8,8),M(0x2a2f3a),0,-.4,0,p);return p});
+  add(new THREE.CylinderGeometry(.2,.17,.6,10),M(navy),0,1.1,0);add(new THREE.BoxGeometry(.42,.07,.26),M(CFG.colors.green),0,1.36,0);
+  [-.27,.27].forEach(x=>add(new THREE.CylinderGeometry(.055,.05,.55,6),M(navy),x,1.1,0));
+  add(new THREE.SphereGeometry(.14,12,10),M(0xe0b896),0,1.6,0);add(new THREE.SphereGeometry(.145,10,6,0,6.28,0,1.6),M(0x1a1410),0,1.63,.01);return g}
+ respawn(){this.pos.set(10,0,38);this.yaw=0;this.stamina=100}
+ update(dt){const u=this.ui;this.yaw-=u.lookDx*.005;this.pitch=MU.clamp(this.pitch-u.lookDy*.005,-1.2,1.2);u.lookDx=u.lookDy=0;
+  const len=Math.hypot(u.mx,u.mz);this.moving=len>.12;this.running=u.run&&this.moving&&!this.tired&&this.stamina>0;
+  this.stamina=MU.clamp(this.stamina+(this.running?-28:16)*dt,0,100);if(this.stamina<=0)this.tired=true;if(this.stamina>25)this.tired=false;
+  let sp=0;if(this.moving){sp=(this.running?6:3.2)*Math.min(1,len);const nx=u.mx/len,nz=u.mz/len,sy=Math.sin(this.yaw),cy=Math.cos(this.yaw);
+   this.pos.x+=(-sy*nz+cy*nx)*sp*dt;this.pos.z+=(-cy*nz-sy*nx)*sp*dt;this.world.resolve(this.pos,.35)}
+  this.t+=dt*sp*2.4;this.legs[0].rotation.x=Math.sin(this.t)*.7*(sp>0);this.legs[1].rotation.x=-Math.sin(this.t)*.7*(sp>0);
+  this.body.position.copy(this.pos);this.body.rotation.y=this.yaw;
+  const cp=Math.cos(this.pitch),eye=new V3(this.pos.x,1.5,this.pos.z);this.light.position.copy(eye);this.light.target.position.set(eye.x-Math.sin(this.yaw)*cp*5,eye.y+Math.sin(this.pitch)*5,eye.z-Math.cos(this.yaw)*cp*5);this.light.intensity=this.flash?3:0}
+ interact(){const d=this.world.nearDoor(this.pos);if(d)this.world.toggleDoor(d);else this.flash=!this.flash}
+}
+
+/* ===== CameraManager : FPS/TPS 전환 + 벽 충돌 회피 + Lerp ===== */
+class CameraManager{
+ constructor(cam,player,world){this.cam=cam;this.p=player;this.w=world;this.mode='fps';cam.position.set(10,1.6,38)}
+ toggle(){this.mode=this.mode==='fps'?'tps':'fps'}
+ update(dt){const p=this.p,cp=Math.cos(p.pitch),f=new V3(-Math.sin(p.yaw)*cp,Math.sin(p.pitch),-Math.cos(p.yaw)*cp),eye=new V3(p.pos.x,1.6,p.pos.z);let tg=eye;
+  if(this.mode==='tps'){let d=3.4;const hx=Math.sin(p.yaw),hz=Math.cos(p.yaw);for(let s=.3;s<=3.4;s+=.2)if(this.w.hit(eye.x+hx*s,eye.z+hz*s,.25)){d=Math.max(.6,s-.3);break}
+   tg=new V3(eye.x-f.x*d,Math.max(.4,eye.y+.35-f.y*d),eye.z-f.z*d)}
+  this.cam.position.lerp(tg,1-Math.exp(-12*dt));this.cam.lookAt(eye.x+f.x*6,eye.y+f.y*6,eye.z+f.z*6);p.body.visible=this.cam.position.distanceTo(eye)>.9}
+}
+
+/* ===== SecurityGuardAI : FSM Patrol → Detect → Chase → Patrol ===== */
+class SecurityGuardAI{
+ constructor(scene,world){this.w=world;this.state='patrol';this.alert=0;this.lost=0;this.i=0;this.active=false;this.onCatch=()=>{};
+  this.wp=[[10,34],[10,6],[10,-6],[10,-11],[-6,-11],[26,-11],[10,-11],[10,0],[-28,8],[-28,-4],[-28,26],[-4,34]].map(a=>new V3(a[0],0,a[1]));
+  this.g=new THREE.Group();const M=c=>new THREE.MeshStandardMaterial({color:c,roughness:.7}),add=(geo,m,y)=>{const o=new THREE.Mesh(geo,m);o.position.y=y;o.castShadow=true;this.g.add(o)};
+  add(new THREE.CylinderGeometry(.25,.22,.9,10),M(0x1c2530),1.05);add(new THREE.CylinderGeometry(.1,.1,.6,8),M(0x14181f),.3);add(new THREE.SphereGeometry(.15,10,8),M(0xd0a888),1.68);add(new THREE.CylinderGeometry(.17,.19,.1,10),M(0x1c2530),1.84);
+  this.g.visible=false;scene.add(this.g);this.fl=new THREE.SpotLight(0xffe9b0,0,24,.45,.5,1);scene.add(this.fl,this.fl.target);this.pos=this.g.position;this.yaw=0}
+ spawn(){this.active=true;this.g.visible=true;this.pos.set(10,0,30);this.i=1;this.state='patrol';this.alert=0}
+ despawn(){this.active=false;this.g.visible=false;this.fl.intensity=0;this.alert=0}
+ moveTo(t,sp,dt){const dx=t.x-this.pos.x,dz=t.z-this.pos.z,d=Math.hypot(dx,dz);if(d<.01)return d;const ty=Math.atan2(-dx,-dz);let dy=ty-this.yaw;dy=Math.atan2(Math.sin(dy),Math.cos(dy));this.yaw+=dy*Math.min(1,dt*6);
+  const k=Math.min(d,sp*dt)/d;this.pos.x+=dx*k;this.pos.z+=dz*k;this.w.resolve(this.pos,.4);return d}
+ update(dt,pl){if(!this.active)return;const P=pl.pos,to=new V3(P.x-this.pos.x,0,P.z-this.pos.z),dist=to.length(),fw=new V3(-Math.sin(this.yaw),0,-Math.cos(this.yaw));
+  const ang=Math.acos(MU.clamp(fw.dot(to.clone().normalize()),-1,1)),los=!this.w.blocked(this.pos,P);
+  const seen=los&&dist<18&&ang<.95,heard=pl.running&&pl.moving&&dist<8;
+  if(this.state!=='chase'){this.alert+= seen?dt*(.5+1.2*(1-dist/18)):heard?dt*.5:-dt*.25;this.alert=MU.clamp(this.alert,0,1)}
+  if(this.state==='patrol'){if(this.alert>.2)this.state='detect';else{const t=this.wp[this.i];if(this.moveTo(t,1.6,dt)<.6)this.i=(this.i+1)%this.wp.length}}
+  else if(this.state==='detect'){const dy=Math.atan2(-to.x,-to.z)-this.yaw;this.yaw+=Math.atan2(Math.sin(dy),Math.cos(dy))*Math.min(1,dt*5);if(this.alert>=1){this.state='chase';this.lost=0}else if(this.alert<.05)this.state='patrol'}
+  else{this.moveTo(P,5.2,dt);this.lost=seen||dist<6?0:this.lost+dt;this.alert=1;if(this.lost>5){this.state='patrol';this.alert=.3}if(dist<1.1){this.onCatch();return}}
+  this.g.rotation.y=this.yaw;const night=true;this.fl.intensity=night?2.6:0;this.fl.color.set(this.state==='chase'?0xff9090:0xffe9b0);
+  this.fl.position.set(this.pos.x,1.4,this.pos.z);this.fl.target.position.set(this.pos.x+fw.x*8,.4,this.pos.z+fw.z*8)}
+}
+
+/* ===== MobileUIManager : 조이스틱·버튼·HUD (터치+마우스+키보드) ===== */
+class MobileUIManager{
+ constructor(h){this.h=h;this.mx=this.mz=0;this.run=false;this.lookDx=this.lookDy=0;const $=i=>document.getElementById(i);this.$=$;
+  const joy=$('joy'),base=$('base'),knob=$('knob');let jid=null,R=60;
+  joy.addEventListener('pointerdown',e=>{jid=e.pointerId;joy.setPointerCapture(jid);mv(e)});joy.addEventListener('pointermove',e=>{if(e.pointerId===jid)mv(e)});
+  const up=e=>{if(e.pointerId===jid){jid=null;this.mx=this.mz=0;knob.style.transform=''}};joy.addEventListener('pointerup',up);joy.addEventListener('pointercancel',up);
+  const mv=e=>{const r=base.getBoundingClientRect();let x=(e.clientX-r.left-r.width/2)/R,y=(e.clientY-r.top-r.height/2)/R;const l=Math.hypot(x,y);if(l>1){x/=l;y/=l}this.mx=x;this.mz=-y;knob.style.transform=`translate(${x*R*.6}px,${y*R*.6}px)`};
+  let lid=null,lx=0,ly=0;const cv=document.getElementById('c');cv.addEventListener('pointerdown',e=>{if(e.clientX>innerWidth*.35||e.pointerType==='mouse'){lid=e.pointerId;lx=e.clientX;ly=e.clientY;cv.setPointerCapture(lid)}});
+  cv.addEventListener('pointermove',e=>{if(e.pointerId===lid){this.lookDx+=e.clientX-lx;this.lookDy+=e.clientY-ly;lx=e.clientX;ly=e.clientY}});cv.addEventListener('pointerup',e=>{if(e.pointerId===lid)lid=null});
+  const rb=$('run');rb.addEventListener('pointerdown',()=>this.run=true);['pointerup','pointercancel','pointerleave'].forEach(n=>rb.addEventListener(n,()=>this.run=false));
+  $('act').addEventListener('pointerdown',()=>h.onInteract());$('view').addEventListener('click',()=>h.onView());$('spd').addEventListener('click',()=>h.onSpeed());$('ngt').addEventListener('click',()=>h.onNight());
+  const K={};addEventListener('keydown',e=>{K[e.code]=1;if(e.code==='KeyE')h.onInteract();if(e.code==='KeyV')h.onView();this.keys(K)});addEventListener('keyup',e=>{K[e.code]=0;this.keys(K)})}
+ keys(K){this.kx=(K.KeyD||K.ArrowRight?1:0)-(K.KeyA||K.ArrowLeft?1:0);this.kz=(K.KeyW||K.ArrowUp?1:0)-(K.KeyS||K.ArrowDown?1:0);this.run=!!(K.ShiftLeft||K.ShiftRight)||this.run&&!!this.$('run').matches(':active');if(this.kx||this.kz){this.mx=this.kx;this.mz=this.kz}else if(!document.querySelector('#joy:active'))this.mx=this.mz=0}
+ hud(d){const $=this.$;$('clock').textContent=d.clock;$('danger').style.width=d.danger*100+'%';$('stamI').style.width=d.stam+'%';$('heart').style.animation=d.danger>.2?`hb ${1.2-d.danger*.8}s infinite`:'';$('heart').style.color=d.danger>.6?'#ff4d4d':'';
+  const p=$('prompt');p.style.display=d.prompt?'block':'none';p.textContent=d.prompt||''}
+ screen(html,cb){const s=this.$('scr');s.innerHTML=html;s.style.display=html?'flex':'none';const b=s.querySelector('button');if(b)b.onclick=cb}
+}
+document.head.insertAdjacentHTML('beforeend','<style>@keyframes hb{0%,100%{transform:scale(1)}50%{transform:scale(1.5)}}</style>');
+
+/* ===== GameEngine : 렌더 루프·델타타임·리사이즈 ===== */
+class GameEngine{
+ constructor(canvas){this.r=new THREE.WebGLRenderer({canvas,antialias:false,powerPreference:'high-performance'});this.r.setPixelRatio(Math.min(devicePixelRatio,1.5));this.r.shadowMap.enabled=true;this.r.shadowMap.type=THREE.PCFSoftShadowMap;
+  this.r.outputEncoding=THREE.sRGBEncoding;this.r.toneMapping=THREE.ACESFilmicToneMapping;this.scene=new THREE.Scene();this.camera=new THREE.PerspectiveCamera(72,1,.1,200);this.clock=new THREE.Clock();this.systems=[];this.paused=true;
+  addEventListener('resize',()=>this.resize());this.resize();this.r.setAnimationLoop(()=>{const dt=Math.min(this.clock.getDelta(),.05);if(!this.paused)this.systems.forEach(s=>s(dt));this.r.render(this.scene,this.camera)})}
+ resize(){this.r.setSize(innerWidth,innerHeight,false);this.camera.aspect=innerWidth/innerHeight;this.camera.updateProjectionMatrix()}
+}
+
+/* ===== 부팅 / 세션 ===== */
+const eng=new GameEngine(document.getElementById('c')),lib=new MaterialLibrary(),world=new SchoolWorld(eng.scene,lib),dn=new DayNightCycle(eng.scene,eng.r);
+let ui,player,cam,guard;const speeds=[1,10,40];let si=0;
+ui=new MobileUIManager({onInteract:()=>player.interact(),onView:()=>cam.toggle(),onSpeed:()=>{si=(si+1)%3;dn.mult=speeds[si];document.getElementById('spd').textContent='⏩ ×'+speeds[si]},onNight:()=>dn.setNight()});
+player=new PlayerController(eng.scene,world,ui);cam=new CameraManager(eng.camera,player,world);guard=new SecurityGuardAI(eng.scene,world);
+dn.onChange=n=>{if(n){guard.spawn();player.flash=true}else guard.despawn()};
+guard.onCatch=()=>{eng.paused=true;ui.screen(`<h1>잡혔다!</h1><p>경비 아저씨에게 붙잡혔어요.<br>정문에서 다시 시작합니다.</p><button>다시 시작</button>`,()=>{player.respawn();guard.despawn();guard.spawn();ui.screen('');eng.paused=false})};
+eng.systems.push(dt=>{dn.update(dt,player.pos);player.update(dt);guard.update(dt,player);cam.update(dt);world.update(dt,dn.night);
+ const d=world.nearDoor(player.pos);ui.hud({clock:dn.label,danger:guard.active?guard.alert:0,stam:player.stamina,prompt:d?(d.open?'문 닫기':'문 열기')+' [상호작용]':null})});
+ui.screen(`<h1>${CFG.school.slice(0,2)}<span>${CFG.school.slice(2)}</span></h1><p>DONGMA MIDDLE SCHOOL · 서울<br>밤이 되면 경비 아저씨가 순찰을 시작해요.<br>들키지 않게 학교를 탐험하세요.</p><p style="font-size:12px">조이스틱 이동 · 오른쪽 드래그 시점 · PC: WASD/Shift/E/V</p><button>탐험 시작</button>`,()=>{ui.screen('');eng.paused=false});
+</script></body></html>
